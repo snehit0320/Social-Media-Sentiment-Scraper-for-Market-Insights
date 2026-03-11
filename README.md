@@ -1,4 +1,4 @@
-# Social Signal Scraper
+# TrendPulse – Social Signal Mining for Market Analytics
 
 A stealthy pipeline for collecting public Twitter/X posts from selected accounts and saving them for downstream sentiment/NLP analysis. Built for research workflows where you want to correlate social signals with market movement.
 
