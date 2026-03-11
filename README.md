@@ -1,4 +1,4 @@
-# Summa Social Signal Scraper
+# Social Signal Scraper
 
 A stealthy pipeline for collecting public Twitter/X posts from selected accounts and saving them for downstream sentiment/NLP analysis. Built for research workflows where you want to correlate social signals with market movement.
 
