@@ -1,0 +1,9 @@
+playwright
+selenium
+beautifulsoup4
+pymongo
+requests
+fake-useragent
+undetected-chromedriver
+webdriver-manager
+numpy

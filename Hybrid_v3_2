@@ -1,0 +1,1291 @@
+"""
+Twitter/X Hybrid Web Scraper - 2025 Edition
+Combines Playwright authentication with requests-based API scraping
+"""
+
+# Core dependencies
+import time
+import random
+import sqlite3
+import json
+import requests
+from urllib.parse import urlencode
+from itertools import cycle
+import asyncio
+from typing import Dict, List, Optional, Tuple
+
+# Browser automation
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+
+# Anti-detection enhancements
+import undetected_chromedriver as uc  # Alternative to Playwright for stealth
+from fake_useragent import UserAgent  # Dynamic user agent rotation
+
+# Logging and monitoring
+import logging
+from datetime import datetime, timedelta
+
+# Configuration management
+from dataclasses import dataclass
+
+dataclass
+class ScraperConfig:
+    """Centralized configuration for the hybrid scraper"""
+    
+    # Authentication credentials
+    TWITTER_USERNAME: str = "Twitter_Username"
+    TWITTER_PASSWORD: str = "Twitter_pwd"
+    
+    # Scraping targets and limits
+    TARGET_ACCOUNTS: List[str] = ["ecb"]
+    MAX_POSTS_PER_ACCOUNT: int = 200
+    SINCE_DATE: str = "2025-01-01"
+    UNTIL_DATE: str = "2025-6-11"
+    
+    # Database settings
+    DATABASE_NAME: str = "ECG_1.db"
+    
+    # Proxy configuration (BrightData, ProxyMesh, etc.)
+    USE_PROXY: bool = False
+    PROXY_ENDPOINTS: List[str] = [
+        "http://username:password@proxy1.provider.com:8080",
+        "http://username:password@proxy2.provider.com:8080",
+        "http://username:password@proxy3.provider.com:8080"
+    ]
+    
+    # Anti-detection settings
+    MIN_DELAY: float = 2.0
+    MAX_DELAY: float = 8.0
+    REQUEST_TIMEOUT: int = 30
+    MAX_RETRIES: int = 3
+    
+    # GraphQL API configuration
+    FALLBACK_GRAPHQL_HASH: str = "aPUD2NUaUaMv3z3i_JGcsQ"
+    GRAPHQL_FEATURES: Dict = None
+    
+    def __post_init__(self):
+        """Initialize GraphQL features after object creation"""
+        if self.GRAPHQL_FEATURES is None:
+            self.GRAPHQL_FEATURES = {
+                "responsive_web_graphql_exclude_directive_enabled": True,
+                "verified_phone_label_enabled": False,
+                "creator_subscriptions_tweet_preview_api_enabled": True,
+                "responsive_web_graphql_timeline_navigation_enabled": True,
+                "view_counts_everywhere_api_enabled": True,
+                "longform_notetweets_consumption_enabled": True,
+                "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
+                "responsive_web_enhance_cards_enabled": False
+            }
+
+# Initialize configuration
+config = ScraperConfig()
+
+class AntiDetectionManager:
+    """Manages anti-detection techniques for stealth scraping"""
+    
+    def __init__(self):
+        self.ua_generator = UserAgent()
+        self.proxy_cycle = cycle(config.PROXY_ENDPOINTS) if config.PROXY_ENDPOINTS else None
+        self.session_headers = self._generate_realistic_headers()
+    
+    def _generate_realistic_headers(self) -> Dict[str, str]:
+        """Generate realistic browser headers to avoid detection [18][23]"""
+        return {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate, br",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Cache-Control": "max-age=0"
+        }
+    
+    def get_rotating_proxy(self) -> Optional[Dict[str, str]]:
+        """Get next proxy in rotation for IP-based anti-detection [24]"""
+        if not self.proxy_cycle:
+            return None
+        
+        proxy_url = next(self.proxy_cycle)
+        return {"http": proxy_url, "https": proxy_url}
+    
+    def get_dynamic_user_agent(self) -> str:
+        """Generate dynamic user agent to prevent fingerprinting [32]"""
+        return self.ua_generator.random
+    
+    def add_human_delay(self, base_delay: float = None):
+        """Add randomized human-like delays between requests [23]"""
+        if base_delay is None:
+            delay = random.uniform(config.MIN_DELAY, config.MAX_DELAY)
+        else:
+            # Add ±30% variance to base delay
+            variance = base_delay * 0.3
+            delay = random.uniform(base_delay - variance, base_delay + variance)
+        
+        time.sleep(delay)
+    
+    def simulate_human_behavior(self, session: requests.Session):
+        """Add realistic browsing patterns to avoid detection [31]"""
+        # Occasionally visit other pages to simulate normal browsing
+        if random.random() < 0.1:  # 10% chance
+            dummy_urls = [
+                "https://x.com/i/notifications",
+                "https://x.com/explore",
+                "https://x.com/settings"
+            ]
+            dummy_url = random.choice(dummy_urls)
+            try:
+                session.get(dummy_url, timeout=10)
+                self.add_human_delay(1.0)
+            except:
+                pass
+
+# Initialize anti-detection manager
+anti_detect = AntiDetectionManager()
+
+class DatabaseManager:
+    """Enhanced database management with better error handling and optimization"""
+    
+    def __init__(self, db_name: str = config.DATABASE_NAME):
+        self.db_name = db_name
+        self.setup_database()
+    
+    def setup_database(self):
+        """Create optimized database schema with indexes [1]"""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        
+        # Create main tweets table with enhanced schema
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tweets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tweet_id TEXT UNIQUE NOT NULL,
+                author_name TEXT NOT NULL,
+                author_handle TEXT NOT NULL,
+                author_verified BOOLEAN DEFAULT FALSE,
+                tweet_text TEXT NOT NULL,
+                post_url TEXT UNIQUE NOT NULL,
+                post_time TEXT NOT NULL,
+                likes INTEGER DEFAULT 0,
+                replies INTEGER DEFAULT 0,
+                reposts INTEGER DEFAULT 0,
+                views INTEGER DEFAULT 0,
+                is_retweet BOOLEAN DEFAULT FALSE,
+                is_quote_tweet BOOLEAN DEFAULT FALSE,
+                language TEXT,
+                source_account TEXT,
+                scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                scraper_version TEXT DEFAULT '2.0'
+            )
+        ''')
+        
+        # Create performance indexes
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_author_handle ON tweets(author_handle)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_post_time ON tweets(post_time)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_source_account ON tweets(source_account)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_scraped_at ON tweets(scraped_at)')
+        
+        # Create metadata table for tracking scraping sessions
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS scraping_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT UNIQUE NOT NULL,
+                target_account TEXT NOT NULL,
+                start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                end_time TIMESTAMP,
+                tweets_collected INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'active',
+                error_message TEXT
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
+        logging.info(f"Database initialized: {self.db_name}")
+    
+    def save_tweets_batch(self, tweets: List[Dict], source_account: str) -> int:
+        """Efficiently save tweets in batch with deduplication"""
+        if not tweets:
+            return 0
+        
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        saved_count = 0
+        
+        for tweet in tweets:
+            try:
+                cursor.execute('''
+                    INSERT OR IGNORE INTO tweets (
+                        tweet_id, author_name, author_handle, author_verified,
+                        tweet_text, post_url, post_time, likes, replies, 
+                        reposts, views, is_retweet, is_quote_tweet, 
+                        language, source_account
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    tweet.get('tweet_id'),
+                    tweet.get('author_name'),
+                    tweet.get('author_handle'),
+                    tweet.get('author_verified', False),
+                    tweet.get('text'),
+                    tweet.get('url'),
+                    tweet.get('time'),
+                    tweet.get('likes', 0),
+                    tweet.get('replies', 0),
+                    tweet.get('reposts', 0),
+                    tweet.get('views', 0),
+                    tweet.get('is_retweet', False),
+                    tweet.get('is_quote_tweet', False),
+                    tweet.get('language'),
+                    source_account
+                ))
+                
+                if cursor.rowcount > 0:
+                    saved_count += 1
+                    
+            except sqlite3.Error as e:
+                logging.error(f"Database error saving tweet {tweet.get('url', 'unknown')}: {e}")
+        
+        conn.commit()
+        conn.close()
+        
+        logging.info(f"Saved {saved_count}/{len(tweets)} new tweets for @{source_account}")
+        return saved_count
+    
+    def get_scraping_statistics(self) -> Dict:
+        """Get comprehensive scraping statistics"""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        
+        stats = {}
+        
+        # Total tweets by account
+        cursor.execute('''
+            SELECT source_account, COUNT(*) as count 
+            FROM tweets 
+            GROUP BY source_account 
+            ORDER BY count DESC
+        ''')
+        stats['tweets_by_account'] = dict(cursor.fetchall())
+        
+        # Recent activity (last 24 hours)
+        cursor.execute('''
+            SELECT COUNT(*) 
+            FROM tweets 
+            WHERE scraped_at > datetime('now', '-1 day')
+        ''')
+        stats['tweets_last_24h'] = cursor.fetchone()[0]
+        
+        conn.close()
+        return stats
+
+# Initialize database manager
+db_manager = DatabaseManager()
+
+class TwitterAuthenticator:
+    """
+    Complete Twitter authentication and API discovery class using Playwright Async API
+    Handles login, session management, and GraphQL endpoint discovery
+    """
+    
+    def __init__(self):
+        """Initialize the authenticator with empty state"""
+        self.auth_details = {}
+        self.live_graphql_hash = None
+        self.browser = None
+        self.context = None
+        self.page = None
+        self.response_intercepted = False
+        
+        # Setup logging for this class
+        self.logger = logging.getLogger(__name__)
+    
+    async def authenticate_and_discover(self, username: str, password: str, headless: bool = False) -> Tuple[Dict, str]:
+        """
+        Main method: Authenticate with Twitter and discover live API endpoints
+        
+        Args:
+            username: Twitter username/email
+            password: Twitter password
+            headless: Whether to run browser in headless mode
+            
+        Returns:
+            Tuple of (auth_details dict, graphql_hash string) or (None, None) on failure
+        """
+        self.logger.info("Phase 1: Starting authentication and API discovery...")
+        
+        try:
+            async with async_playwright() as p:
+                # Configure browser with anti-detection settings
+                browser_options = await self._get_browser_options(headless)
+                
+                # Launch browser
+                self.browser = await p.chromium.launch(**browser_options)
+                
+                # Create context with realistic fingerprint
+                self.context = await self.browser.new_context(
+                    user_agent=self._get_realistic_user_agent(),
+                    viewport={"width": 1920, "height": 1080},
+                    locale="en-US",
+                    timezone_id="America/New_York",
+                    extra_http_headers={
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Accept-Encoding": "gzip, deflate, br",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+                    }
+                )
+                
+                # Create new page
+                self.page = await self.context.new_page()
+                
+                # Set up response interception for API discovery
+                self._setup_response_handler()
+                
+                # Perform login sequence
+                success = await self._perform_complete_login(username, password)
+                if not success:
+                    self.logger.error("Login failed")
+                    return None, None
+                
+                # Trigger API calls to capture authentication details
+                await self._trigger_comprehensive_api_discovery()
+                
+                # Extract all session data
+                await self._extract_complete_session_data()
+                
+                # Validate captured data
+                if not self._validate_auth_data():
+                    self.logger.error("Failed to capture required authentication details")
+                    return None, None
+                
+                # Clean up
+                await self.browser.close()
+                
+                self.logger.info("Phase 1 completed successfully")
+                self.logger.info(f"Captured GraphQL hash: {self.live_graphql_hash}")
+                self.logger.info(f"Captured {len(self.auth_details)} authentication details")
+                
+                return self.auth_details, self.live_graphql_hash
+                
+        except Exception as e:
+            self.logger.error(f"Authentication failed: {str(e)}")
+            await self._cleanup_browser()
+            return None, None
+    
+    async def _get_browser_options(self, headless: bool) -> Dict:
+        """Configure browser options with anti-detection settings"""
+        return {
+            "headless": headless,
+            "args": [
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-web-security",
+                "--disable-features=VizDisplayCompositor",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+                "--user-agent=" + self._get_realistic_user_agent()
+            ]
+        }
+    
+    def _get_realistic_user_agent(self) -> str:
+        """Generate realistic user agent string"""
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0"
+        ]
+        return random.choice(user_agents)
+    
+    def _setup_response_handler(self):
+        """Set up response interception to capture API details and authentication tokens"""
+        def handle_response(response):
+            try:
+                url = response.url
+                headers = dict(response.request.headers)
+                
+                # Look for SearchTimeline API calls
+                if "SearchTimeline" in url and not self.live_graphql_hash:
+                    self.logger.info("Intercepted SearchTimeline API call")
+                    self._extract_graphql_hash_from_url(url)
+                    self._extract_auth_headers(headers)
+                    self.response_intercepted = True
+                
+                # Look for other important API endpoints
+                elif any(endpoint in url for endpoint in [
+                    'UserByScreenName', 'UserTweets', 'TweetDetail', 
+                    'HomeTimeline', 'ListLatestTweetsTimeline'
+                ]):
+                    self.logger.info(f"Intercepted API call: {url}")
+                    self._extract_auth_headers(headers)
+                
+                # Capture any GraphQL calls
+                elif "/graphql/" in url and "/SearchTimeline" not in url:
+                    self._extract_graphql_hash_from_url(url)
+                    self._extract_auth_headers(headers)
+                    
+            except Exception as e:
+                self.logger.error(f"Error in response handler: {e}")
+        
+        self.page.on("response", handle_response)
+    
+    def _extract_graphql_hash_from_url(self, url: str):
+        """Extract GraphQL hash from intercepted URL"""
+        try:
+            url_parts = url.split('/')
+            if 'graphql' in url_parts:
+                hash_index = url_parts.index('graphql') + 1
+                if hash_index < len(url_parts):
+                    potential_hash = url_parts[hash_index]
+                    # Validate hash format (should be alphanumeric and specific length)
+                    if len(potential_hash) > 15 and potential_hash.replace('_', '').replace('-', '').isalnum():
+                        self.live_graphql_hash = potential_hash
+                        self.logger.info(f"Extracted GraphQL hash: {potential_hash}")
+        except Exception as e:
+            self.logger.error(f"Error extracting GraphQL hash: {e}")
+    
+    def _extract_auth_headers(self, headers: Dict):
+        """Extract authentication headers from intercepted requests"""
+        try:
+            # Critical authentication headers
+            auth_headers = [
+                'authorization', 'x-csrf-token', 'x-client-transaction-id',
+                'x-twitter-auth-type', 'x-twitter-client-language',
+                'cookie'
+            ]
+            
+            for header in auth_headers:
+                if header in headers and header not in self.auth_details:
+                    self.auth_details[header] = headers[header]
+                    self.logger.info(f"Captured header: {header}")
+                    
+        except Exception as e:
+            self.logger.error(f"Error extracting auth headers: {e}")
+    
+    async def _perform_complete_login(self, username: str, password: str) -> bool:
+        """Perform complete Twitter login sequence with error handling"""
+        try:
+            self.logger.info("Starting login process...")
+            
+            # Navigate to login page
+            await self.page.goto("https://x.com/login", timeout=90000)
+            await self._add_human_delay(2, 4)
+            
+            # Handle initial username entry
+            if not await self._handle_username_entry(username):
+                return False
+            
+            # Handle potential phone/username verification step
+            await self._handle_verification_step(username)
+            
+            # Handle password entry
+            if not await self._handle_password_entry(password):
+                return False
+            
+            # Wait for successful login
+            if not await self._verify_login_success():
+                return False
+            
+            self.logger.info("Login completed successfully")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Login process failed: {str(e)}")
+            return False
+    
+    async def _handle_username_entry(self, username: str) -> bool:
+        """Handle username entry step"""
+        try:
+            # Wait for username input field
+            username_input = self.page.locator("input[name='text']").first
+            await username_input.wait_for(timeout=30000)
+            
+            # Clear and fill username
+            await username_input.clear()
+            await username_input.fill(username)
+            await self._add_human_delay(1, 2)
+            
+            # Click Next button
+            next_button = self.page.get_by_role("button", name="Next")
+            await next_button.click()
+            await self._add_human_delay(2, 4)
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Username entry failed: {e}")
+            return False
+    
+    async def _handle_verification_step(self, username: str):
+        """Handle additional verification step if it appears"""
+        try:
+            # Check for unusual login flow
+            verification_input = self.page.locator("input[data-testid='ocfEnterTextTextInput']")
+            
+            if await verification_input.is_visible(timeout=5000):
+                self.logger.info("Handling additional verification step")
+                await verification_input.fill(username)
+                await self._add_human_delay(1, 2)
+                
+                # Click Next button for verification
+                next_button = self.page.get_by_role("button", name="Next")
+                await next_button.click()
+                await self._add_human_delay(2, 4)
+            else:
+                self.logger.info("No additional verification required")
+                
+        except Exception as e:
+            self.logger.info("Standard login flow - no additional verification")
+    
+    async def _handle_password_entry(self, password: str) -> bool:
+        """Handle password entry step"""
+        try:
+            # Wait for password input
+            password_input = self.page.locator("input[name='password']").first
+            await password_input.wait_for(timeout=30000)
+            
+            # Fill password
+            await password_input.fill(password)
+            await self._add_human_delay(1, 2)
+            
+            # Click login button
+            login_button = self.page.get_by_role("button", name="Log in")
+            await login_button.click()
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Password entry failed: {e}")
+            return False
+    
+    async def _verify_login_success(self) -> bool:
+        """Verify that login was successful"""
+        try:
+            # Wait for home page or handle potential errors
+            await self.page.wait_for_url("https://x.com/home", timeout=60000)
+            self.logger.info("Successfully reached home timeline")
+            return True
+            
+        except Exception as e:
+            # Check if we're on a different success page
+            current_url = self.page.url
+            if "x.com" in current_url and "/login" not in current_url:
+                self.logger.info(f"Login successful - redirected to: {current_url}")
+                return True
+            else:
+                self.logger.error(f"Login verification failed. Current URL: {current_url}")
+                return False
+    
+    async def _trigger_comprehensive_api_discovery(self):
+        # Navigate to search and perform multiple scroll actions
+        search_url = "https://x.com/search?q=news&src=typed_query"
+        await self.page.goto(search_url, wait_until='networkidle', timeout=30000)
+        
+        # Perform extended scrolling to trigger SearchTimeline APIs
+        for i in range(10):  # Multiple scroll cycles
+            await self.page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
+            await self._add_human_delay(3, 5)  # Wait for API calls
+            
+            if self.response_intercepted:
+                break
+
+            
+            # Try additional pages to capture more API endpoints
+            additional_pages = [
+                "/explore",
+                "/notifications", 
+                "/messages",
+                "/bookmarks"
+            ]
+            
+            for path in additional_pages:
+                try:
+                    await self.page.goto(f"https://x.com{path}", timeout=20000)
+                    await self._add_human_delay(2, 3)
+                except Exception as e:
+                    self.logger.warning(f"Failed to navigate to {path}: {e}")
+                    continue
+            
+            # Scroll on home timeline to trigger more API calls
+            try:
+                await self.page.goto("https://x.com/home", timeout=20000)
+                await self._simulate_scrolling()
+            except Exception as e:
+                self.logger.warning(f"Home timeline scrolling failed: {e}")
+                
+            except Exception as e:
+                self.logger.error(f"API discovery failed: {e}")
+    
+    async def _simulate_scrolling(self):
+        """Simulate human-like scrolling to trigger API calls"""
+        try:
+            for _ in range(3):
+                # Scroll down
+                await self.page.evaluate("window.scrollBy(0, window.innerHeight * 1.5)")
+                await self._add_human_delay(2, 4)
+                
+                # Occasionally scroll up a bit
+                if random.random() < 0.3:
+                    await self.page.evaluate("window.scrollBy(0, -window.innerHeight * 0.5)")
+                    await self._add_human_delay(1, 2)
+                    
+        except Exception as e:
+            self.logger.error(f"Scrolling simulation failed: {e}")
+    
+    async def _extract_complete_session_data(self):
+        """Extract comprehensive session data including cookies and local storage"""
+        try:
+            # Extract cookies
+            cookies = await self.context.cookies()
+            self.auth_details['cookies'] = {c['name']: c['value'] for c in cookies}
+            
+            # Extract important session cookies individually
+            important_cookies = [
+                'auth_token', 'ct0', 'guest_id', 'personalization_id',
+                'twid', 'kdt', 'remember_checked_on', 'lang'
+            ]
+            
+            for cookie_name in important_cookies:
+                cookie_value = self.auth_details['cookies'].get(cookie_name)
+                if cookie_value:
+                    self.auth_details[cookie_name] = cookie_value
+            
+            # Extract localStorage data
+            try:
+                local_storage = await self.page.evaluate("() => JSON.stringify(localStorage)")
+                if local_storage:
+                    self.auth_details['local_storage'] = json.loads(local_storage)
+            except Exception as e:
+                self.logger.warning(f"Failed to extract localStorage: {e}")
+            
+            # Extract sessionStorage data
+            try:
+                session_storage = await self.page.evaluate("() => JSON.stringify(sessionStorage)")
+                if session_storage:
+                    self.auth_details['session_storage'] = json.loads(session_storage)
+            except Exception as e:
+                self.logger.warning(f"Failed to extract sessionStorage: {e}")
+            
+            self.logger.info(f"Extracted {len(self.auth_details['cookies'])} cookies and session data")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to extract session data: {e}")
+    
+    def _validate_auth_data(self) -> bool:
+        """Validate that all required authentication data was captured"""
+        required_fields = ['authorization', 'x-csrf-token', 'cookies']
+        
+        for field in required_fields:
+            if field not in self.auth_details or not self.auth_details[field]:
+                self.logger.error(f"Missing required authentication field: {field}")
+                return False
+        
+        if not self.live_graphql_hash:
+            self.logger.error("Missing GraphQL hash")
+            return False
+        
+        # Validate authorization header format
+        auth_header = self.auth_details.get('authorization', '')
+        if not auth_header.startswith('Bearer '):
+            self.logger.error("Invalid authorization header format")
+            return False
+        
+        return True
+    
+    async def _add_human_delay(self, min_seconds: float = 1.0, max_seconds: float = 3.0):
+        """Add randomized human-like delays"""
+        delay = random.uniform(min_seconds, max_seconds)
+        await asyncio.sleep(delay)
+    
+    async def _cleanup_browser(self):
+        """Clean up browser resources"""
+        try:
+            if self.browser:
+                await self.browser.close()
+        except Exception as e:
+            self.logger.error(f"Error during browser cleanup: {e}")
+    
+    def get_session_summary(self) -> Dict:
+        """Get summary of captured session data"""
+        return {
+            'has_authorization': 'authorization' in self.auth_details,
+            'has_csrf_token': 'x-csrf-token' in self.auth_details,
+            'has_cookies': 'cookies' in self.auth_details,
+            'cookie_count': len(self.auth_details.get('cookies', {})),
+            'has_graphql_hash': bool(self.live_graphql_hash),
+            'graphql_hash': self.live_graphql_hash,
+            'captured_headers': list(self.auth_details.keys())
+        }
+    
+    def save_session_data(self, filepath: str):
+        """Save captured session data to file for debugging"""
+        try:
+            session_data = {
+                'auth_details': self.auth_details,
+                'graphql_hash': self.live_graphql_hash,
+                'timestamp': time.time()
+            }
+            
+            with open(filepath, 'w') as f:
+                json.dump(session_data, f, indent=2)
+                
+            self.logger.info(f"Session data saved to: {filepath}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to save session data: {e}")
+
+
+# Initialize authenticator
+authenticator = TwitterAuthenticator()
+
+class TwitterAPIScraper:
+    """High-performance API scraping engine with advanced error handling [15][17]"""
+    
+    def __init__(self, auth_details: Dict, graphql_hash: str):
+        self.auth_details = auth_details
+        self.graphql_hash = graphql_hash
+        self.session = self._create_optimized_session()
+        self.request_count = 0
+        self.last_request_time = 0
+        
+    def _create_optimized_session(self) -> requests.Session:
+        """Create optimized requests session with authentication [18][19]"""
+        session = requests.Session()
+        
+        # Set authentication headers
+        session.headers.update({
+            "authorization": self.auth_details['authorization'],
+            "x-csrf-token": self.auth_details['x-csrf-token'],
+            "User-Agent": anti_detect.get_dynamic_user_agent(),
+            "Referer": "https://x.com/",
+            "Origin": "https://x.com"
+        })
+        
+        # Add all captured headers
+        session.headers.update(anti_detect.session_headers)
+        
+        # Set cookies
+        session.cookies.update(self.auth_details['cookies'])
+        
+        # Configure proxy rotation
+        session.proxies = anti_detect.get_rotating_proxy()
+        
+        # Configure session for better performance
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=20,
+            max_retries=3
+        )
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        
+        return session
+    
+    def scrape_account_tweets(self, account: str, since_date: str, until_date: str) -> List[Dict]:
+        """
+        Scrape tweets from specific account using high-speed API calls [11][15]
+        """
+        logging.info(f"Phase 2: Starting API scraping for @{account}")
+        
+        all_tweets = []
+        cursor = None
+        search_query = f"(from:{account}) until:{until_date} since:{since_date}"
+        consecutive_failures = 0
+        
+        # Construct API URL with live hash
+        api_url = f"https://x.com/i/api/graphql/{self.graphql_hash}/SearchTimeline"
+        
+        while len(all_tweets) < config.MAX_POSTS_PER_ACCOUNT:
+            try:
+                # Rate limiting and anti-detection
+                self._implement_rate_limiting()
+                
+                # Prepare request variables
+                variables = {
+                    "rawQuery": search_query,
+                    "count": 40,  # Maximum allowed per request
+                    "querySource": "typed_query",
+                    "product": "Latest"
+                }
+                
+                if cursor:
+                    variables["cursor"] = cursor
+                
+                # Prepare request parameters
+                params = {
+                    "variables": json.dumps(variables),
+                    "features": json.dumps(config.GRAPHQL_FEATURES)
+                }
+                
+                # Make API request with retry logic
+                response = self._make_request_with_retry(api_url, params)
+                if not response:
+                    break
+                
+                # Parse response
+                tweets_batch, next_cursor = self._parse_api_response(response, account)
+                
+                if not tweets_batch and not next_cursor:
+                    logging.info("No more tweets found or end of timeline reached")
+                    break
+                
+                all_tweets.extend(tweets_batch)
+                cursor = next_cursor
+                consecutive_failures = 0
+                
+                logging.info(f"Collected {len(tweets_batch)} tweets. Total: {len(all_tweets)}/{config.MAX_POSTS_PER_ACCOUNT}")
+                
+                # Simulate human behavior occasionally
+                if random.random() < 0.05:  # 5% chance
+                    anti_detect.simulate_human_behavior(self.session)
+                
+            except Exception as e:
+                consecutive_failures += 1
+                logging.error(f"Error scraping @{account}: {str(e)}")
+                
+                if consecutive_failures >= 3:
+                    logging.error("Too many consecutive failures, stopping...")
+                    break
+                
+                # Exponential backoff on errors
+                time.sleep(min(60, 2 ** consecutive_failures))
+        
+        logging.info(f"Completed scraping @{account}: {len(all_tweets)} tweets collected")
+        return all_tweets
+    
+    def _implement_rate_limiting(self):
+        """Implement intelligent rate limiting to avoid detection [15][23]"""
+        current_time = time.time()
+        
+        # Ensure minimum delay between requests
+        if self.last_request_time:
+            elapsed = current_time - self.last_request_time
+            min_delay = 1.5  # Minimum 1.5 seconds between requests
+            
+            if elapsed < min_delay:
+                sleep_time = min_delay - elapsed + random.uniform(0.5, 2.0)
+                time.sleep(sleep_time)
+        
+        # Implement request quotas (150 requests per 15 minutes)
+        self.request_count += 1
+        if self.request_count % 100 == 0:  # Every 100 requests
+            logging.info(f"Implemented longer pause after {self.request_count} requests")
+            time.sleep(random.uniform(60, 120))  # 1-2 minute pause
+        
+        self.last_request_time = time.time()
+    
+    def _make_request_with_retry(self, url: str, params: Dict) -> Optional[requests.Response]:
+        """Make HTTP request with intelligent retry logic [18][23]"""
+        for attempt in range(config.MAX_RETRIES):
+            try:
+                response = self.session.get(
+                    url, 
+                    params=params, 
+                    timeout=config.REQUEST_TIMEOUT
+                )
+                
+                # Handle different HTTP status codes
+                if response.status_code == 200:
+                    return response
+                elif response.status_code == 429:  # Rate limited
+                    wait_time = 60 * (2 ** attempt)  # Exponential backoff
+                    logging.warning(f"Rate limited. Waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                elif response.status_code in [401, 403]:  # Authentication issues
+                    logging.error("Authentication failed. Need to re-authenticate.")
+                    return None
+                else:
+                    logging.warning(f"HTTP {response.status_code}. Attempt {attempt + 1}/{config.MAX_RETRIES}")
+                    time.sleep(2 ** attempt)
+                    
+            except requests.exceptions.RequestException as e:
+                logging.error(f"Request failed (attempt {attempt + 1}): {str(e)}")
+                if attempt < config.MAX_RETRIES - 1:
+                    time.sleep(2 ** attempt)
+        
+        return None
+    
+    def _parse_api_response(self, response: requests.Response, source_account: str) -> Tuple[List[Dict], Optional[str]]:
+        """Parse Twitter API response and extract tweet data [11]"""
+        try:
+            data = response.json()
+            
+            # Navigate through API response structure
+            search_timeline = data.get('data', {}).get('search_by_raw_query', {}).get('search_timeline', {})
+            if not search_timeline:
+                logging.error("Invalid API response structure")
+                return [], None
+            
+            instructions = search_timeline.get('timeline', {}).get('instructions', [])
+            if not instructions:
+                return [], None
+            
+            tweets = []
+            next_cursor = None
+            
+            for instruction in instructions:
+                if instruction.get('type') == 'TimelineAddEntries':
+                    for entry in instruction.get('entries', []):
+                        entry_id = entry.get('entryId', '')
+                        
+                        # Process tweet entries
+                        if entry_id.startswith('tweet-'):
+                            parsed_tweet = self._parse_tweet_entry(entry, source_account)
+                            if parsed_tweet:
+                                tweets.append(parsed_tweet)
+                        
+                        # Extract pagination cursor
+                        elif entry_id.startswith('cursor-bottom-'):
+                            next_cursor = entry.get('content', {}).get('value')
+            
+            return tweets, next_cursor
+            
+        except json.JSONDecodeError:
+            logging.error("Failed to decode JSON response")
+            return [], None
+        except Exception as e:
+            logging.error(f"Error parsing API response: {str(e)}")
+            return [], None
+    
+    def _parse_tweet_entry(self, entry: Dict, source_account: str) -> Optional[Dict]:
+        """Parse individual tweet entry from API response [11]"""
+        try:
+            # Navigate through complex nested structure
+            content = entry.get('content', {})
+            item_content = content.get('itemContent', {})
+            tweet_results = item_content.get('tweet_results', {})
+            result = tweet_results.get('result', {})
+            
+            # Skip if result is incomplete
+            if not result or result.get('__typename') == 'TweetUnavailable':
+                return None
+            
+            legacy = result.get('legacy', {})
+            if not legacy:
+                return None
+            
+            # Extract user information
+            user_result = result.get('core', {}).get('user_results', {}).get('result', {})
+            user_legacy = user_result.get('legacy', {})
+            
+            # Extract tweet metadata
+            tweet_id = legacy.get('id_str', '')
+            if not tweet_id:
+                return None
+            
+            # Parse engagement metrics
+            views_count = 0
+            views_data = result.get('views', {})
+            if views_data and views_data.get('count'):
+                try:
+                    views_count = int(views_data.get('count', '0'))
+                except (ValueError, TypeError):
+                    views_count = 0
+            
+            # Construct standardized tweet object
+            parsed_tweet = {
+                'tweet_id': tweet_id,
+                'author_name': user_legacy.get('name', 'Unknown'),
+                'author_handle': user_legacy.get('screen_name', 'unknown'),
+                'author_verified': user_legacy.get('verified', False),
+                'text': legacy.get('full_text', ''),
+                'url': f"https://x.com/{user_legacy.get('screen_name', 'user')}/status/{tweet_id}",
+                'time': legacy.get('created_at', ''),
+                'likes': legacy.get('favorite_count', 0),
+                'replies': legacy.get('reply_count', 0),
+                'reposts': legacy.get('retweet_count', 0),
+                'views': views_count,
+                'is_retweet': legacy.get('retweeted', False),
+                'is_quote_tweet': 'quoted_status' in legacy,
+                'language': legacy.get('lang', 'unknown'),
+                'source_account': source_account
+            }
+            
+            return parsed_tweet
+            
+        except Exception as e:
+            logging.error(f"Error parsing tweet entry: {str(e)}")
+            return None
+
+# API scraper will be initialized after authentication
+
+class HybridTwitterScraper:
+    """Main orchestration class for the hybrid scraping system"""
+    
+    def __init__(self, config: ScraperConfig):
+        self.config = config
+        self.db_manager = DatabaseManager()
+        self.authenticator = TwitterAuthenticator()
+        self.api_scraper = None
+        self.session_id = self._generate_session_id()
+        
+        # Setup logging
+        self._setup_logging()
+    
+    def _generate_session_id(self) -> str:
+        """Generate unique session ID for tracking"""
+        return f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{random.randint(1000, 9999)}"
+    
+    def _setup_logging(self):
+        """Configure comprehensive logging system"""
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(f'scraper_{datetime.now().strftime("%Y%m%d")}.log'),
+                logging.StreamHandler()
+            ]
+        )
+    
+    async def run_full_scraping_pipeline(self) -> Dict:
+        """Execute complete hybrid scraping pipeline"""
+        pipeline_start = time.time()
+        results = {
+            'session_id': self.session_id,
+            'start_time': datetime.now().isoformat(),
+            'accounts_processed': {},
+            'total_tweets_collected': 0,
+            'errors': [],
+            'performance_metrics': {}
+        }
+        
+        try:
+            logging.info(f"Starting hybrid scraping pipeline - Session: {self.session_id}")
+            
+            # ✅ Phase 1: Authentication and API Discovery (now properly async)
+            auth_details, graphql_hash = await self.authenticator.authenticate_and_discover(
+                self.config.TWITTER_USERNAME,
+                self.config.TWITTER_PASSWORD,
+                headless=False  # Set to True for production
+            )
+            
+            if not auth_details or not graphql_hash:
+                raise Exception("Phase 1 failed: Could not authenticate or discover API endpoints")
+            
+            # Initialize Phase 2 scraper
+            self.api_scraper = TwitterAPIScraper(auth_details, graphql_hash)
+            
+            # Phase 2: High-speed data collection
+            for account in self.config.TARGET_ACCOUNTS:
+                account_start = time.time()
+                
+                try:
+                    logging.info(f"Processing account: @{account}")
+                    
+                    # Record session start
+                    self._record_session_start(account)
+                    
+                    # Scrape tweets
+                    tweets = self.api_scraper.scrape_account_tweets(
+                        account, 
+                        self.config.SINCE_DATE, 
+                        self.config.UNTIL_DATE
+                    )
+                    
+                    # Save to database
+                    saved_count = self.db_manager.save_tweets_batch(tweets, account)
+                    
+                    # Update results
+                    account_time = time.time() - account_start
+                    results['accounts_processed'][account] = {
+                        'tweets_collected': len(tweets),
+                        'tweets_saved': saved_count,
+                        'processing_time': account_time,
+                        'tweets_per_second': len(tweets) / account_time if account_time > 0 else 0
+                    }
+                    
+                    results['total_tweets_collected'] += saved_count
+                    
+                    # Record session completion
+                    self._record_session_completion(account, saved_count)
+                    
+                    # Inter-account delay
+                    if account != self.config.TARGET_ACCOUNTS[-1]:  # Not last account
+                        delay = random.uniform(30, 60)  # 30-60 second pause between accounts
+                        logging.info(f"Waiting {delay:.1f} seconds before next account...")
+                        time.sleep(delay)
+                        
+                except Exception as e:
+                    error_msg = f"Error processing @{account}: {str(e)}"
+                    logging.error(error_msg)
+                    results['errors'].append(error_msg)
+                    self._record_session_error(account, error_msg)
+            
+            # Generate final performance metrics
+            total_time = time.time() - pipeline_start
+            results['performance_metrics'] = {
+                'total_pipeline_time': total_time,
+                'average_time_per_account': total_time / len(self.config.TARGET_ACCOUNTS),
+                'overall_tweets_per_second': results['total_tweets_collected'] / total_time if total_time > 0 else 0
+            }
+            
+            results['end_time'] = datetime.now().isoformat()
+            results['status'] = 'completed'
+            
+            logging.info(f"Pipeline completed successfully. Total tweets: {results['total_tweets_collected']}")
+            
+        except Exception as e:
+            error_msg = f"Pipeline failed: {str(e)}"
+            logging.error(error_msg)
+            results['errors'].append(error_msg)
+            results['status'] = 'failed'
+            results['end_time'] = datetime.now().isoformat()
+        
+        # Print final summary
+        self._print_results_summary(results)
+        
+        return results
+    
+    def _record_session_start(self, account: str):
+        """Record scraping session start in database"""
+        conn = sqlite3.connect(self.db_manager.db_name)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO scraping_sessions (session_id, target_account, status)
+            VALUES (?, ?, 'active')
+        ''', (f"{self.session_id}_{account}", account))
+        
+        conn.commit()
+        conn.close()
+    
+    def _record_session_completion(self, account: str, tweets_count: int):
+        """Record successful session completion"""
+        conn = sqlite3.connect(self.db_manager.db_name)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE scraping_sessions 
+            SET end_time = CURRENT_TIMESTAMP, tweets_collected = ?, status = 'completed'
+            WHERE session_id = ?
+        ''', (tweets_count, f"{self.session_id}_{account}"))
+        
+        conn.commit()
+        conn.close()
+    
+    def _record_session_error(self, account: str, error_message: str):
+        """Record session error in database"""
+        conn = sqlite3.connect(self.db_manager.db_name)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE scraping_sessions 
+            SET end_time = CURRENT_TIMESTAMP, status = 'failed', error_message = ?
+            WHERE session_id = ?
+        ''', (error_message, f"{self.session_id}_{account}"))
+        
+        conn.commit()
+        conn.close()
+    
+    def _print_results_summary(self, results: Dict):
+        """Print comprehensive results summary"""
+        print("\n" + "="*60)
+        print("HYBRID TWITTER SCRAPER - RESULTS SUMMARY")
+        print("="*60)
+        print(f"Session ID: {results['session_id']}")
+        print(f"Status: {results['status'].upper()}")
+        print(f"Total Tweets Collected: {results['total_tweets_collected']}")
+        
+        if results['accounts_processed']:
+            print("\nPer-Account Results:")
+            for account, metrics in results['accounts_processed'].items():
+                print(f"  @{account}:")
+                print(f"    - Tweets Collected: {metrics['tweets_collected']}")
+                print(f"    - Tweets Saved: {metrics['tweets_saved']}")
+                print(f"    - Processing Time: {metrics['processing_time']:.2f}s")
+                print(f"    - Rate: {metrics['tweets_per_second']:.2f} tweets/sec")
+        
+        if results.get('performance_metrics'):
+            metrics = results['performance_metrics']
+            print(f"\nPerformance Metrics:")
+            print(f"  - Total Pipeline Time: {metrics['total_pipeline_time']:.2f}s")
+            print(f"  - Average Time per Account: {metrics['average_time_per_account']:.2f}s")
+            print(f"  - Overall Rate: {metrics['overall_tweets_per_second']:.2f} tweets/sec")
+        
+        if results['errors']:
+            print(f"\nErrors Encountered ({len(results['errors'])}):")
+            for error in results['errors']:
+                print(f"  - {error}")
+        
+        print("="*60)
+
+async def main():
+    """Main execution function with comprehensive error handling"""
+    
+    # Validate configuration
+    if not config.TWITTER_USERNAME or config.TWITTER_USERNAME == "your_email@gmail.com":
+        print("❌ Please update TWITTER_USERNAME in the configuration")
+        return
+    
+    if not config.TWITTER_PASSWORD or config.TWITTER_PASSWORD == "your_password":
+        print("❌ Please update TWITTER_PASSWORD in the configuration")
+        return
+    
+    # Initialize and run scraper
+    scraper = HybridTwitterScraper(config)
+    
+    try:
+        # Run the complete pipeline
+        results = await scraper.run_full_scraping_pipeline()
+        
+        # Optional: Export results to JSON
+        output_file = f"scraping_results_{scraper.session_id}.json"
+        with open(output_file, 'w') as f:
+            json.dump(results, f, indent=2, default=str)
+        
+        print(f"\n📊 Detailed results saved to: {output_file}")
+        
+        # Display database statistics
+        stats = scraper.db_manager.get_scraping_statistics()
+        print(f"\n📈 Database Statistics:")
+        print(f"Total tweets by account: {stats['tweets_by_account']}")
+        print(f"Tweets collected in last 24h: {stats['tweets_last_24h']}")
+        
+    except Exception as e:
+        logging.error(f"Fatal error in main execution: {str(e)}")
+        print(f"❌ Scraper failed: {str(e)}")
+
+# Utility functions for standalone usage
+def quick_scrape_account(account: str, max_tweets: int = 100) -> List[Dict]:
+    """Quick utility function to scrape a single account"""
+    temp_config = ScraperConfig()
+    temp_config.TARGET_ACCOUNTS = [account]
+    temp_config.MAX_POSTS_PER_ACCOUNT = max_tweets
+    
+    scraper = HybridTwitterScraper(temp_config)
+    
+    # Run asyncio event loop
+    results = asyncio.run(scraper.run_full_scraping_pipeline())
+    return results
+
+# Entry point
+if __name__ == "__main__":
+    print("🚀 Twitter Hybrid Scraper 2025 - Starting...")
+    print("📋 Configuration Summary:")
+    print(f"   - Target Accounts: {config.TARGET_ACCOUNTS}")
+    print(f"   - Max Posts per Account: {config.MAX_POSTS_PER_ACCOUNT}")
+    print(f"   - Date Range: {config.SINCE_DATE} to {config.UNTIL_DATE}")
+    print(f"   - Proxy Enabled: {config.USE_PROXY}")
+    print(f"   - Database: {config.DATABASE_NAME}")
+    print()
+    
+    # Check for required dependencies
+    try:
+        import playwright
+        import undetected_chromedriver
+        import fake_useragent
+        print("✅ All required dependencies found")
+    except ImportError as e:
+        print(f"❌ Missing dependency: {e}")
+        print("Please install: pip install playwright undetected-chromedriver fake-useragent")
+        exit(1)
+    
+    # Run main scraper
+    asyncio.run(main())
+
